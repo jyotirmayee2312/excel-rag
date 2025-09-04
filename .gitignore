@@ -1,0 +1,4 @@
+temp/
+__pycache/
+data_2db.db
+check.py
