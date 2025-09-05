@@ -18,7 +18,12 @@ database = "excel_rag"
 
 engine = create_engine(f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}")
 db = SQLDatabase(engine)
-schema = db.get_table_info()
+
+
+def refresh_db():
+    global db
+    db = SQLDatabase(engine)
+    return db
 
 # ---------------- Retry Wrapper ----------------
 def excel_to_mysql(excel_file):
@@ -75,7 +80,7 @@ def excel_to_mysql(excel_file):
         df.to_sql(sheet_name, con=engine, if_exists="replace", index=False)
         print(f"✅ Data loaded into '{sheet_name}' table in '{database_name}'.")
         table_names.append(sheet_name)
-
+    print(table_names)
     engine.dispose()
     print(f"\nAll sheets from '{excel_file}' loaded into '{database_name}' database.")
     return table_names
@@ -139,7 +144,7 @@ Rules:
   differences, or accuracy scores. Leave those for Python.
 - Keep the query efficient by returning only necessary rows and columns.
 - Do NOT return extra explanations or text — only SQL.
-- don't use keywords as alias ex(actual sales AS as).
+- don't use keywords as alias.
 - if someone ask about how many table in this database or excel or sheet then take database_name as excel_rag.
 - if column name contain space then wrap it in backticks (`).
 - if column name contain "/" then wrap it in backticks (`).
@@ -177,35 +182,36 @@ def execute_sql(query: str) -> pd.DataFrame:
         return df
 
 # ---------------- Pandas Agent ----------------
-def run_dataframe_agent(question: str, df: pd.DataFrame, llm: llm) -> str:
+def run_dataframe_agent(question: str, df: pd.DataFrame, llm) -> str:
     instruction = f"""
 You are a data analysis assistant. You must compute the final answer from the DataFrame provided.
 Do NOT describe the DataFrame or repeat columns. Instead:
 - Perform necessary calculations (e.g., sums, percentages, counts, groupings).
-- Return only the final computed answer clearly and concisely.
+- Return only the final computed answer clearly and concisely (not as code).
 - For inventory aging buckets, compute totals or relevant metrics as required by the question.
 """
     pandas_agent = create_pandas_dataframe_agent(
         llm,
         df,
         verbose=True,
-        handle_parsing_errors=True,
-        allow_dangerous_code=True,   # 👈 required opt-in
+        allow_dangerous_code=True  
 
     )
     result = pandas_agent.invoke({"input": instruction + "\n\nQuestion: " + question})
     return result["output"]
 
 # ---------------- Pipeline ----------------
-def pipeline(question: str, max_retries: int = 5,check=False) -> str:
+def pipeline(question: str, table_names: list, max_retries: int = 5, check: bool=False) -> str:
     current_question = question
+    schema = refresh_db().get_table_info()
+
 
     for attempt in range(max_retries):
         print(f"\n🔄 Attempt {attempt+1} ----------------------")
         
         # Generate SQL
         try:
-            sql,check = generate_sql_with_llm(current_question, schema)
+            sql, check = generate_sql_with_llm(current_question, schema)
             print(f"Generated SQL:\n{sql}")
         except Exception as e:
             print(f"❌ SQL Generation Error: {e}")
@@ -238,11 +244,17 @@ Based on this, provide a concise answer in natural language:
 - Negate the condition in the question if appropriate (e.g., 'No, the condition is not met').
 - If timing, stock levels, or additional info is missing, mention it clearly.
 - Return only the final answer, do not include SQL or data.
+- be aware of output parser structure.
 """
             llm_response = llm.invoke(negation_prompt).content.strip()
             return llm_response
 
-        # Run Pandas agent
+        # ✅ Skip Pandas Agent if it's a metadata query
+        if "INFORMATION_SCHEMA" in sql.upper():
+            print("⚠️ Metadata query detected — returning raw SQL result.")
+            return df.to_dict(orient="records")
+
+        # Run Pandas agent otherwise
         try:
             if df.shape[1] == 1:
                 return df.iloc[0, 0]
@@ -251,9 +263,14 @@ Based on this, provide a concise answer in natural language:
             return final_answer
         except Exception as e:
             print(f"❌ Pandas Agent Error: {e}")
-            return f"❌ Pandas Agent failed: {e}"
+            match = re.search(r"Could not parse LLM output:\s*`(.*?)`\s*For troubleshooting", str(e), re.DOTALL)
+
+            if match:
+                return match.group(1).strip()
+            return str(e)
 
     return "NO result found"
+
 
 
 # # ---------------- Run ----------------
