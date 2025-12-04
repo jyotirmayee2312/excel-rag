@@ -1,0 +1,5 @@
+{
+  "name": "SQL GenAI Explorer",
+  "description": "A React frontend for natural language to SQL generation. Connects to your database context and allows you to chat with your data using Gemini 2.5.",
+  "requestFramePermissions": []
+}
