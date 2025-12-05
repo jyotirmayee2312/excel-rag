@@ -1,0 +1,5 @@
+{
+  "name": "CSV Data Analyst",
+  "description": "A smart chat application that allows you to upload CSV files and ask questions about your data using Gemini 2.5 Flash.",
+  "requestFramePermissions": []
+}
